@@ -78,11 +78,11 @@ def main():
 
     # サーバーから解析完了のメッセージ受信 & 解析
     header = sock.recv(10)
-    bytes_roomname = int.from_bytes(header[:2], "big")
-    operation = int.from_bytes(header[2:3], "big")
-    curr_states = int.from_bytes(header[3:4], "big")
-    bytes_username = int.from_bytes(header[4:6], "big")
-    bytes_message = int.from_bytes(header[6:], "big")
+    bytes_roomname = int.from_bytes(header[:4], "big")
+    operation = int.from_bytes(header[4:5], "big")
+    curr_states = int.from_bytes(header[5:6], "big")
+    bytes_username = int.from_bytes(header[6:10], "big")
+    bytes_message = int.from_bytes(header[10:], "big")
 
     body_len = bytes_roomname + bytes_username + bytes_message
     body = sock.recv(body_len)
@@ -109,12 +109,12 @@ def main():
         # サーバーからのトークンを受け取るための解析処理
         header = sock.recv(12)
         # roomname, operation, states, username, message, token
-        roomname_bytes = int.from_bytes(header[:2], "big")
-        operation = int.from_bytes(header[2:3], "big")
-        states = int.from_bytes(header[3:4], "big")
-        username_bytes = int.from_bytes(header[4:6], "big")
-        message_bytes = int.from_bytes(header[6:8], "big")
-        token_bytes = int.from_bytes(header[8:], "big")
+        roomname_bytes = int.from_bytes(header[:4], "big")
+        operation = int.from_bytes(header[4:5], "big")
+        states = int.from_bytes(header[5:6], "big")
+        username_bytes = int.from_bytes(header[6:10], "big")
+        message_bytes = int.from_bytes(header[10:14], "big")
+        token_bytes = int.from_bytes(header[14:], "big")
 
         # roomname, username, message, token
         stream_rate = roomname_bytes + username_bytes + message_bytes + token_bytes
@@ -132,23 +132,13 @@ def main():
         print(f"メッセージ：{message}")
         print(f"トークン：{token}")
 
-        ip_len_bits = sock.recv(1)
-        ip_len = int.from_bytes(ip_len_bits, "big")
-        ip_bits = sock.recv(ip_len)
-        ip = ip_bits.decode('utf-8')
-
-        port_bits = sock.recv(2)
-        port = int.from_bytes(port_bits, "big")
-
         print("ソケットを閉じました。")
         sock.close()
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
     #### UDP通信
     while True:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        
-        sock.bind((ip, port))
-
         roomname_bits = roomname.encode('utf-8')
         roomname_size = len(roomname_bits)
         roomname_size_of_bytes = roomname_size.to_bytes(1, "big")

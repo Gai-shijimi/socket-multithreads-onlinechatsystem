@@ -8,7 +8,7 @@ import threading
 def make_header(roomname, operation_code, states, username, message):
     roomname_bits = roomname.encode('utf-8')
     roomname_len = len(roomname_bits)
-    roomnamelen_bytes_count = roomname_len.to_bytes(2, "big")
+    roomnamelen_bytes_count = roomname_len.to_bytes(4, "big")
 
     operation_code_bytes_count = operation_code.to_bytes(1, "big")
 
@@ -16,8 +16,7 @@ def make_header(roomname, operation_code, states, username, message):
 
     username_bits = username.encode('utf-8')
     username_len = len(username_bits)
-    usernamelen_bytes_count = username_len.to_bytes(2, "big")
-
+    usernamelen_bytes_count = username_len.to_bytes(4, "big")
     message_bits = message.encode('utf-8')
     len_bytes_message = len(message_bits)
     messagelen_bytes_count = len_bytes_message.to_bytes(4, "big")
@@ -29,7 +28,7 @@ def make_header(roomname, operation_code, states, username, message):
 def make_header_for_complite(roomname, operation, states, username, message, token):
     roomname_bits = roomname.encode('utf-8')
     roomname_len = len(roomname_bits)
-    roomnamelen_bytes_count = roomname_len.to_bytes(2, "big")
+    roomnamelen_bytes_count = roomname_len.to_bytes(4, "big")
 
     operation_code_bytes_count = operation.to_bytes(1, "big")
 
@@ -37,11 +36,11 @@ def make_header_for_complite(roomname, operation, states, username, message, tok
 
     username_bits = username.encode('utf-8')
     username_len = len(username_bits)
-    usernamelen_bytes_count = username_len.to_bytes(2, "big")
+    usernamelen_bytes_count = username_len.to_bytes(4, "big")
 
     message_bits = message.encode('utf-8')
     message_len = len(message_bits)
-    messagelen_bytes_count = message_len.to_bytes(2, "big")
+    messagelen_bytes_count = message_len.to_bytes(4, "big")
 
     
     token_bits = token.encode('utf-8')
@@ -68,42 +67,47 @@ def make_body_for_complite(roomname, username, message, token):
 
 
 def is_roomname_registered(roomname):
-    if roomname not in rooms:
-        return False
+    flag = False
+    if roomname in rooms:
+        flag = True
+    return flag
     
 def generate_token(length=32):
     chars = string.ascii_letters + string.digits
     return ''.join(secrets.choice(chars) for _ in range(length))
 
 def add_roomname_to_rooms(roomname):
-    rooms[roomname] = {}
+    with rooms_lock:
+        rooms[roomname] = {}
 
 
 def add_user_to_roomname(roomname, username):
-    rooms[roomname][username] = {}
+    with rooms_lock:
+        rooms[roomname][username] = {}
     
 
 def add_token_to_user(roomname, username, token):
-    rooms[roomname][username]["token"] = token
+    with rooms_lock:
+        rooms[roomname][username]["token"] = token
 
 
 def add_address_to_username(roomname, username, addr):
-    rooms[roomname][username]["address"] = addr
+    with rooms_lock:
+        rooms[roomname][username]["address"] = addr
 
 
 def add_last_time_sent_at_to_user(roomname, username):
-    rooms[roomname][username]["last_time_sent_at"] = datetime.now()
+    with rooms_lock:
+        rooms[roomname][username]["last_time_sent_at"] = datetime.now()
 
 
 def valid_token(roomname, token, client_addr):
-    flag = False
     for userdata in rooms[roomname].values():
-        if client_addr == userdata["address"] and token == userdata["token"]:
-            flag = True
-            print(client_addr)
-            print(userdata["address"])
-    
-    return flag
+        if userdata.get("token") == token:
+            if "udp_address" not in userdata:
+                userdata["udp_address"] = client_addr
+            return userdata.get("udp_address") == client_addr
+    return False
 
 def get_username(roomname, token):
     user_list = list(rooms[roomname].keys())
@@ -260,13 +264,13 @@ def handle_tcp_connection(client_socket, addr):
             message = "チャットルームへの参加要求(states = 0)のリクエストを受信し、解析しました。"
             print(message + "次の処理に進みます。")
             states = 1
-            header = make_header(roomname, username, message, operation_code, states)
+            header = make_header(roomname, operation_code, states, username, message)
             client_socket.sendall(header)
             body = make_body(roomname, username, message)
 
             ##### クライアントへ処理完了のメッセージ送信 state => 2:
             states = 2
-            token = rooms[roomname][username]
+            token = rooms[roomname][username]["token"]
             message = "サーバー側において、ルーム作成の処理は成功しました。"
 
             header = make_header_for_complite(roomname, operation_code, states, username, message, token)
@@ -277,37 +281,47 @@ def handle_tcp_connection(client_socket, addr):
 
     
 rooms = {}
-server_address = '0.0.0.0'
+rooms_lock = threading.Lock()
+
+server_address = '127.0.0.1'
 server_port = 9000
 
 def main():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     
 
-    sock.bind((server_address, server_port))
-    sock.listen(1)
+    tcp_sock.bind((server_address, server_port))
+    tcp_sock.listen(1)
     print("サーバー待機中……………………")
+
+    tcp_thread = threading.Thread(target=tcp_listener, args=(tcp_sock,), daemon=True)
+    tcp_thread.start()
+
+    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_thread = threading.Thread(target=udp_communication, args=(udp_sock,), daemon=True)
+    udp_thread.start()
+
+    threading.Event().wait()
 
     
 def tcp_listener(sock):
-    
-
     while True:
         try:
             client_socket, addr = sock.accept()
-        except sock.error as err:
+        except socket.error as err:
             print(err)
             break
 
         print(addr)
         tcp_thread = threading.Thread(target=handle_tcp_connection, args=(client_socket, addr), daemon=True)
         tcp_thread.start()
+
+        
     
 
-def udp_communication():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind((server_address, server_port))
+def udp_communication(sock):
+    
 
     # thread_delete_client = threading.Thread(target=delete_client, args=(sock,), daemon=True)
     # thread_delete_client.start()
@@ -348,7 +362,7 @@ def udp_communication():
         else:
             print("トークンが有効ではないです。")
             token = ""
-            
+
 
 if __name__ == "__main__":
     main()
