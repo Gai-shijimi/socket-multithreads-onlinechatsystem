@@ -1,167 +1,142 @@
 import socket
-import time
 import threading
-
-def build_connection(sock, server_address, server_port):
-    sock.connect((server_address,server_port))
+import queue
 
 
-def make_header_protocol(roomname, operation_code, curr_states, username):
-    # ヘッダー：10バイト
-    roomname_bits = roomname.encode('utf-8')
-    roomname_bits_len = len(roomname_bits)
-    to_bytes_roomnamelen = roomname_bits_len.to_bytes(4, "big")
+SERVER_ADDRESS = '127.0.0.1'
+SERVER_PORT = 9000
 
-    to_bytes_operation_code = operation_code.to_bytes(1, "big")
+q = queue.Queue()
 
-    to_bytes_curr_states = curr_states.to_bytes(1, "big")
+def make_header_protocol(op, states, roomname, username):
+    o = op.to_bytes(1, "big")
+    s = states.to_bytes(1, "big")
+    room = len(roomname.encode('utf-8')).to_bytes(4, "big")
+    user = len(username.encode('utf-8')).to_bytes(4, "big")
 
-    username_bits = username.encode('utf-8')
-    username_bits_len= len(username_bits)
-    to_bytes_usernamelen = username_bits_len.to_bytes(4, "big")
-
-    return to_bytes_roomnamelen + to_bytes_operation_code + to_bytes_curr_states + to_bytes_usernamelen
+    return o + s + room + user
 
 
 def make_body(roomname, username):
-    roomname_bits = roomname.encode('utf-8')
-    username_bits = username.encode('utf-8')
-
-    return roomname_bits + username_bits
-
+    r = roomname.encode('utf-8')
+    u = username.encode('utf-8')
+    return r + u
 
 
-# def receive_and_parse_payload(sock):
-#     header = sock.recv(16)
-#     bytes_roomname = int.from_bytes(header[:4], "big")
-#     operation = int.from_bytes(header[4:5], "big")
-#     curr_states = int.from_bytes(header[5:6], "big")
-#     bytes_username = int.from_bytes(header[6:10], "big")
-#     bytes_message = int.from_bytes(header[10:], "big")
+def recv_state1_mssg(tcp_sock,):
+    header = tcp_sock.recv(2)
+    state = int.from_bytes(header[:1], "big")
+    m_len = int.from_bytes(header[1:], "big")
 
-#     body = sock.recv(2032)
-#     roomname = body[:bytes_roomname].decode('utf-8')
-#     username = body[bytes_roomname:bytes_roomname+bytes_username].decode('utf-8')
-#     message = body[bytes_roomname+bytes_username:].decode('utf-8')
+    body = tcp_sock.recv(8)
+    state = body[:state].decode('utf-8')
+    message = body[state:state+m_len].decode('utf-8')
 
-#     print(f"ルーム名：{roomname}")
-#     print(f"ユーザー名：{username}")
-#     print(f"操作コード：{operation}")
-#     print(f"現在の状態：{curr_states}")
-#     print(f"サーバーからのメッセージ：{message}")
+    print(f"状態：{state}, メッセージ:{message}")
 
+
+def recv_state2_mssg(tcp_sock,):
+    header = tcp_sock.recv(16)
+
+    op = int.from_bytes(header[:1], "big")
+    state = int.from_bytes(header[1:2], "big")
+    room_len = int.from_bytes(header[2:3], "big")
+    user_len = int.from_bytes(header[3:4], "big")
+    mssg_len = int.from_bytes(header[4:8], "big")
+    token_len =  int.from_bytes(header[8:], "big")
+
+    body = tcp_sock.recv(64)
+    roomname = body[:room_len].decode('utf-8')
+    username = body[room_len:room_len+user_len].decode('utf-8')
+    message = body[room_len+user_len: room_len+user_len+mssg_len].decode('utf-8')
+    token = body[room_len+user_len+mssg_len: room_len+user_len+mssg_len+token_len].decode('utf-8')
+
+    print(f"{roomname}, {username}, {message}, {token}")
+
+    q.put(roomname)
+    q.put(username)
+    q.put(message)
+    q.put(token)
+
+
+def sender(sock, roomname, token):
+    roomname_len = len(roomname).to_bytes(1, "big")
+    token_size = len(token).to_bytes(1, "big")
+
+    roomname_b = roomname.encode('utf-8')
+    token_b = token.encode('utf-8')
+
+    pre_payload = roomname_len + token_size + roomname_b + token_b
+
+    while True:
+        message = input("input message please")
+        message_b = message.encode('utf-8')
+
+        payload =  pre_payload + message_b
+        sock.sendto(payload, (SERVER_ADDRESS, SERVER_PORT))
+
+
+def receiver(sock):
+    while True:
+        data, _ = sock.recvfrom(4096)
+        # username_len, username, message
+        username_len = int.from_bytes(data[:1], "big")
+        username = data[1:1+username_len].decode('utf-8')
+        message = data[1+username_len:].decode('utf-8')
+
+        print(f"{username}: {message}")
+        
+
+    
 
 
 def main():
-    
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
 
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    tcp_sock.connect((SERVER_ADDRESS, SERVER_PORT))
 
-    server_address = '0.0.0.0'
-    server_port = 9000
+    # operation = input("部屋作成: 1, 部屋参加: 2 を入力してください")
+    # roomname = input("部屋名を入力してください")
+    # username = input("ユーザー名を入力してください")
+    # curr_states = 0
 
-    build_connection(sock, server_address, server_port)
-
-    #  チャットルーム作成のリクエスト送信
-    roomname = "テストルーム名"
-    operation_code = 1
+    operation = 1
     curr_states = 0
-    username = "テストユーザー名１"
+    roomname = "testroom"
+    username = "test1"
+    
 
-    header = make_header_protocol(roomname, operation_code, curr_states, username)
-    sock.sendall(header)
+    header = make_header_protocol(operation, curr_states, roomname, username)
+    tcp_sock.sendall(header)
 
     body = make_body(roomname, username)
-    sock.sendall(body)
+    tcp_sock.sendall(body)
 
+    recv_state1_mssg = threading.Thread(target=recv_state1_mssg, args=(tcp_sock, ))
+    recv_state1_mssg.start()
+    recv_state1_mssg.join()
 
-    # サーバーから解析完了のメッセージ受信 & 解析
-    header = sock.recv(10)
-    bytes_roomname = int.from_bytes(header[:4], "big")
-    operation = int.from_bytes(header[4:5], "big")
-    curr_states = int.from_bytes(header[5:6], "big")
-    bytes_username = int.from_bytes(header[6:10], "big")
-    bytes_message = int.from_bytes(header[10:], "big")
+    recv_state2_mssg = threading.Thread(target=recv_state2_mssg, args=(tcp_sock,))
+    recv_state2_mssg.start()
+    recv_state2_mssg.join()
 
-    body_len = bytes_roomname + bytes_username + bytes_message
-    body = sock.recv(body_len)
-    roomname = body[:bytes_roomname].decode('utf-8')
-    username = body[bytes_roomname:bytes_roomname+bytes_username].decode('utf-8')
-    message = body[bytes_roomname+bytes_username:].decode('utf-8')
+    print("TCP通信を閉じます")
+    tcp_sock.close()
 
-
-    print(f"ルーム名：{roomname}")
-    print(f"ユーザー名：{username}")
-    print(f"操作コード：{operation}")
-    print(f"現在の状態：{curr_states}")
-    print(f"サーバーからのメッセージ：{message}")
-    
-    # states == 0 の場合
-    if curr_states == 0:
-        print(f"再掲：{message}")
-    # 再びユーザーにinputさせる処理(後に作成)
-    
-    # states == 1 の場合
-    elif curr_states == 1:
-        print(f"準拠成功：{message}")
-
-        # サーバーからのトークンを受け取るための解析処理
-        header = sock.recv(12)
-        # roomname, operation, states, username, message, token
-        roomname_bytes = int.from_bytes(header[:4], "big")
-        operation = int.from_bytes(header[4:5], "big")
-        states = int.from_bytes(header[5:6], "big")
-        username_bytes = int.from_bytes(header[6:10], "big")
-        message_bytes = int.from_bytes(header[10:14], "big")
-        token_bytes = int.from_bytes(header[14:], "big")
-
-        # roomname, username, message, token
-        stream_rate = roomname_bytes + username_bytes + message_bytes + token_bytes
-        body = sock.recv(stream_rate)
-        roomname = body[:roomname_bytes].decode('utf-8')
-        username = body[roomname_bytes:roomname_bytes+username_bytes].decode('utf-8')
-        a = roomname_bytes + username_bytes
-        message = body[a: a+message_bytes].decode('utf-8')
-        b = a + message_bytes
-        token = body[b:].decode('utf-8')
-
-        print(f"これは操作コード：{operation}の、状態：{states}の通信です。")
-        print(f"ルーム名：{roomname}")
-        print(f"ユーザー名：{username}")
-        print(f"メッセージ：{message}")
-        print(f"トークン：{token}")
-
-        print("ソケットを閉じました。")
-        sock.close()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
-    #### UDP通信
-    while True:
-        roomname_bits = roomname.encode('utf-8')
-        roomname_size = len(roomname_bits)
-        roomname_size_of_bytes = roomname_size.to_bytes(1, "big")
+    roomname = q.get()
+    username = q.get()
+    _ = q.get()
+    token = q.get()
 
-        token_bits = token.encode('utf-8')
-        token_size = len(token_bits)
-        token_size_of_bytes = token_size.to_bytes(1, "big")
+    receive = threading.Thread(target=receiver, args=(sock, ), daemon=True)
+    receive.start()
 
-        message = "はじめまして、テストユーザー１です。"
-        message_bits = message.encode('utf-8')
+    send = threading.Thread(target=sender, args=(sock, roomname, token), daemon=True)
+    send.start()
 
-        payload = roomname_size_of_bytes + token_size_of_bytes + roomname_bits + token_bits + message_bits
-        
-        sent = sock.sendto(payload, (server_address, server_port))
-        print(f"メッセージを送信しました。：{sent}")
+    
 
-
-        print("メッセージを待っています。")
-        data, server = sock.recvfrom(4096)
-        message_from_server = data.decode('utf-8')
-        print(f"データを受信しました。：{message_from_server} from {server}")
-
-
-
-if __name__ == "__main__":
-    main()
