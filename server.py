@@ -230,6 +230,7 @@ def update_user_info(rooms, roomname, token, username, addr, lock):
             
 
 def udp_listener(sock, rooms, lock):
+    print("UDP通信を開始します")
     while True:
         data, client_addr = sock.recvfrom(4096)
         #roomname, token, message

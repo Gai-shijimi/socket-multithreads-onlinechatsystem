@@ -63,12 +63,14 @@ def recv_state2_mssg(tcp_sock):
     print(f"mssg_len: {mssg_len}")
     print(f"token_len: {token_len}")
 
-    payload_size = 64
+    payload_size = room_len + user_len + mssg_len + token_len
     body = recv_exact(tcp_sock, payload_size)
-    roomname = body[:room_len].decode('utf-8')
-    username = body[room_len:room_len+user_len].decode('utf-8')
-    message = body[room_len+user_len: room_len+user_len+mssg_len].decode('utf-8')
-    token = body[room_len+user_len+mssg_len: room_len+user_len+mssg_len+token_len].decode('utf-8')
+
+    off = 0
+    roomname = body[:room_len].decode('utf-8'); off += room_len
+    username = body[off:off+user_len].decode('utf-8'); off += user_len
+    message = body[off: off+mssg_len].decode('utf-8'); off += mssg_len
+    token = body[off: off+token_len].decode('utf-8')
 
     print(f"roomname: {roomname}")
     print(f"username: {username}")
