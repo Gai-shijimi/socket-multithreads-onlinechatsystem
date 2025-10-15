@@ -2,6 +2,7 @@ import socket
 import threading
 import secrets
 import string
+import time
 
 SERVER_ADDRESS = '127.0.0.1'
 SERVER_PORT = 5000
@@ -20,9 +21,21 @@ def tcp_listener(sock, lock, rooms):
         tcp_thread = threading.Thread(target=tcp_connection, args=(conn, addr, lock, rooms), daemon=True)
         tcp_thread.start()
 
+
+def recv_exact(conn, protocol_size):
+    buf = bytearray()
+    while len(buf) < protocol_size:
+        chunk = conn.recv(protocol_size - len(buf))
+        if not chunk:
+            raise ConnectionError("peer closed before reading enough bytes")
+        buf.extend(chunk)
+    return bytes(buf)
+
+
 # op, states, roomname, username
 def request_analysis(header_cont, conn):
-    header = conn.recv(16)
+    protocol_size = 10
+    header = recv_exact(conn, protocol_size)
     op_code = int.from_bytes(header[0:1], "big")
     status = int.from_bytes(header[1:2], "big")
     roomname = int.from_bytes(header[2:6], "big")
@@ -35,7 +48,8 @@ def request_analysis(header_cont, conn):
     
 
 def body_analysis(b_cont, h_cont, conn):
-    body = conn.recv(h_cont[2] + h_cont[3])
+    payload_size = h_cont[2] + h_cont[3]
+    body = recv_exact(conn, payload_size)
     roomname = body[:h_cont[2]].decode('utf-8')
     username = body[h_cont[2]: h_cont[2]+h_cont[3]].decode('utf-8')
     b_cont.append(roomname)
@@ -55,29 +69,32 @@ def generate_token(length=32):
     return token
 
 
-def add_info_to_rooms(header_cont, body_cont, token, rooms):
+def add_info_to_rooms(header_cont, body_cont, token, rooms, lock):
     roomname = body_cont[0]
     username = body_cont[1]
-
-    if not rooms and header_cont[0] == 1: 
-        rooms[roomname] = {
-            "users": [
-                {
-                    "id" : "host",
-                    "username": username,
-                    "token": token
+    flag = True
+    if not rooms.get(roomname):
+        flag = False
+    with lock:
+        if not flag and header_cont[0] == 1:
+            rooms = {
+                roomname: {
+                    "users":{
+                        token: {
+                            "token": token,
+                            "username": username, 
+                            "id": "host",
+                            "udp":None,
+                            }
+                    }
                 }
-            ]
-        }
+            }
 
-    elif header_cont[0] == 2:
-        new_user = {
-            "id": "member",
-            "username": username,
-            "token": token
-        }
-
-        rooms[roomname]["users"].append(new_user)
+        elif header_cont[0] == 2:
+            rooms[roomname]["users"][token]["token"] = token
+            rooms[roomname]["users"][token]["username"] = username
+            rooms[roomname]["users"][token]["id"] = "member"
+            rooms[roomname]["users"][token]["udp"] = None
 
 
 def main_mssg_handler(header_cont, body_cont, token, conn):
@@ -102,8 +119,7 @@ def s1_mssg_handler(h_cont, message, conn):
     header = state + len_m
     conn.sendall(header)
 
-    payload = state + m
-    conn.sendall(payload)
+    conn.sendall(m)
 
 
 def s2_mssg_handler(h_cont, b_cont, message, token, conn):
@@ -114,13 +130,26 @@ def s2_mssg_handler(h_cont, b_cont, message, token, conn):
     roomname = b_cont[0]
     username = b_cont[1]
 
-    room_len = len(roomname.encode("utf-8")).to_bytes(1, "big")
-    user_len = len(username.encode('utf-8')).to_bytes(1, "big")
+    print(f"op: {op}")
+    print(f"state: {state}")
+    print(f"roomname: {roomname}")
+    print(f"username: {username}")
+
+    room_len = len(roomname.encode("utf-8")).to_bytes(4, "big")
+    user_len = len(username.encode('utf-8')).to_bytes(4, "big")
     mssg_len = len(message.encode('utf-8')).to_bytes(4, "big")
     token_len = len(token.encode('utf-8')).to_bytes(4, "big")
+
+    print(f"room_len: {room_len}")
+    print(f"user_len: {user_len}")
+    print(f"mssg_len: {mssg_len}")
+    print(f"token_len: {token_len}")
+
+    # op:1, state:1, room_len:4, user_len:4, mssg_len:4, token_len:4
     header = op.to_bytes(1, "big") + state.to_bytes(1, "big") + room_len + user_len + mssg_len + token_len
 
     conn.sendall(header)
+
 
     room_b = roomname.encode('utf-8')
     user_b = username.encode('utf-8')
@@ -153,10 +182,11 @@ def tcp_connection(conn, addr, lock, rooms):
             print("エラーメッセージ")
             # ルームは作成されている、参加? エラーメッセージを送信
         else:
-            add_info_to_rooms(header_cont, body_cont, token, rooms)
+            add_info_to_rooms(header_cont, body_cont, token, rooms, lock)
 
             main_mssg_handler(header_cont, body_cont, token, conn)
 
+            time.sleep(10)
             print("TCP通信のソケットを閉じます。")
             conn.close()
         
@@ -178,53 +208,60 @@ def tcp_connection(conn, addr, lock, rooms):
             conn.close()
 
 
-def get_username(rooms, roomname, token):
-    for users in rooms[roomname]:
-        if users.get("token") == token:
-            return users.get("username")
+def get_username(rooms, roomname, token, lock):
+    with lock:
+        for user in rooms[roomname]["users"]:
+            if user[token]["token"] == token:
+                return user[token]["username"]
         
-def valid_token(rooms, roomname, token):
-    for users in rooms[roomname]:
-        if users.get("token") == token:
-            return True
-    
-    return False
+def valid_token(rooms, roomname, token, lock):
+    with lock:
+        for user in rooms[roomname]["users"]:
+            if user[token]["token"]== token:
+                return True
+        
+        return False
+
+def update_user_info(rooms, roomname, token, username, addr, lock):
+    with lock:
+        role = rooms[roomname]["users"][token]["id"]
+        rooms[roomname]["users"][token].update({"token":token, "username":username, "id": role, "udp": addr})
+
             
 
-def udp_listener(sock, rooms):
+def udp_listener(sock, rooms, lock):
     while True:
         data, client_addr = sock.recvfrom(4096)
-
         #roomname, token, message
         roomname_len = int.from_bytes(data[:1], "big")
         token_len = int.from_bytes(data[1:2], "big")
-
         roomname = data[2:2+roomname_len].decode("utf-8")
         token = data[2+roomname_len:2+roomname_len+token_len].decode('utf-8')
         message = data[2+roomname_len+token_len:].decode('utf-8')
 
-        username = get_username(rooms, roomname, token)
+        username = get_username(rooms, roomname, token, lock)
+
+        update_user_info(rooms, roomname, token, username, client_addr, lock)
+
         print(f"クライアントからのメッセージ受信：{roomname}, {username}, {token}, {message}")
 
-        is_valid = valid_token(rooms, roomname, token)
+        is_valid = valid_token(rooms, roomname, token, lock)
+
+        username_len = len(username).to_bytes(1, "big")
+        username_b = username.encode('utf-8')
+        message_b = message.encode('utf-8')
+        payload = username_len + username_b + message_b
 
         if is_valid:
-            for users in rooms[roomname]:
-                username_len = len(username).to_bytes(1, "big")
-                username_b = username.encode('utf-8')
-                message_b = message.encode('utf-8')
-
-                payload = username_len + username_b + message_b
+            for token in rooms[roomname]["users"].keys():
+                sock.sendto(payload, token["udp"])
+        else:
+            print("Error")
                 
-                sock.sendto(payload, )
-                
-
-
-
 
 def main():
     tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+    tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     tcp_sock.bind((SERVER_ADDRESS, SERVER_PORT))
     tcp_sock.listen(10)
@@ -237,10 +274,10 @@ def main():
 
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_sock.bind((SERVER_ADDRESS, U_SERVER_PORT))
-    udp_thread = threading.Thread(target=udp_listener, args=(udp_sock,rooms), daemon=True)
+    udp_thread = threading.Thread(target=udp_listener, args=(udp_sock,rooms, lock), daemon=True)
     udp_thread.start()
 
-
+    threading.Event().wait()
 
 
 

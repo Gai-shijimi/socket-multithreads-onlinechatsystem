@@ -4,7 +4,7 @@ import queue
 
 
 SERVER_ADDRESS = '127.0.0.1'
-SERVER_PORT = 9000
+SERVER_PORT = 5000
 
 q = queue.Queue()
 
@@ -22,36 +22,59 @@ def make_body(roomname, username):
     u = username.encode('utf-8')
     return r + u
 
+### これを調べる
+def recv_exact(tcp_sock, protocol_size):
+    buf = bytearray()
+    while len(buf) < protocol_size:
+        chunk = tcp_sock.recv(protocol_size - len(buf))
+        if not chunk:
+            raise ConnectionError("Socket closed while reading")
+        buf.extend(chunk)
+    return bytes(buf)
 
-def recv_state1_mssg(tcp_sock,):
-    header = tcp_sock.recv(2)
+
+def recv_state1_mssg(tcp_sock):
+    protocol_size = 8
+    header = recv_exact(tcp_sock, protocol_size)
     state = int.from_bytes(header[:1], "big")
-    m_len = int.from_bytes(header[1:], "big")
+    m_len = int.from_bytes(header[1:8], "big")
 
-    body = tcp_sock.recv(8)
-    state = body[:state].decode('utf-8')
-    message = body[state:state+m_len].decode('utf-8')
+    body = recv_exact(tcp_sock, m_len)
+    message = body[0:m_len].decode('utf-8')
 
-    print(f"状態：{state}, メッセージ:{message}")
+    print(f"状態：{state}/メッセージ:{message}")
 
 
-def recv_state2_mssg(tcp_sock,):
-    header = tcp_sock.recv(16)
+def recv_state2_mssg(tcp_sock):
+    protocol_size = 18
+    header = recv_exact(tcp_sock, protocol_size)
 
     op = int.from_bytes(header[:1], "big")
     state = int.from_bytes(header[1:2], "big")
-    room_len = int.from_bytes(header[2:3], "big")
-    user_len = int.from_bytes(header[3:4], "big")
-    mssg_len = int.from_bytes(header[4:8], "big")
-    token_len =  int.from_bytes(header[8:], "big")
+    room_len = int.from_bytes(header[2:6], "big")
+    user_len = int.from_bytes(header[6:10], "big")
+    mssg_len = int.from_bytes(header[10:14], "big")
+    token_len =  int.from_bytes(header[14:18], "big")
 
-    body = tcp_sock.recv(64)
+    print(f"op: {op}")
+    print(f"state: {state}")
+    print(f"room_len: {room_len}")
+    print(f"user_len: {user_len}")
+    print(f"mssg_len: {mssg_len}")
+    print(f"token_len: {token_len}")
+
+    payload_size = 64
+    body = recv_exact(tcp_sock, payload_size)
     roomname = body[:room_len].decode('utf-8')
     username = body[room_len:room_len+user_len].decode('utf-8')
     message = body[room_len+user_len: room_len+user_len+mssg_len].decode('utf-8')
     token = body[room_len+user_len+mssg_len: room_len+user_len+mssg_len+token_len].decode('utf-8')
 
-    print(f"{roomname}, {username}, {message}, {token}")
+    print(f"roomname: {roomname}")
+    print(f"username: {username}")
+    print(f"message: {message}")
+    print(f"token: {token}")
+
 
     q.put(roomname)
     q.put(username)
@@ -92,7 +115,7 @@ def receiver(sock):
 
 def main():
     tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+    tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     tcp_sock.connect((SERVER_ADDRESS, SERVER_PORT))
 
@@ -113,13 +136,13 @@ def main():
     body = make_body(roomname, username)
     tcp_sock.sendall(body)
 
-    recv_state1_mssg = threading.Thread(target=recv_state1_mssg, args=(tcp_sock, ))
-    recv_state1_mssg.start()
-    recv_state1_mssg.join()
+    t_state1 = threading.Thread(target=recv_state1_mssg, args=(tcp_sock, ))
+    t_state1.start()
+    t_state1.join()
 
-    recv_state2_mssg = threading.Thread(target=recv_state2_mssg, args=(tcp_sock,))
-    recv_state2_mssg.start()
-    recv_state2_mssg.join()
+    t_state2 = threading.Thread(target=recv_state2_mssg, args=(tcp_sock,))
+    t_state2.start()
+    t_state2.join()
 
     print("TCP通信を閉じます")
     tcp_sock.close()
@@ -138,5 +161,8 @@ def main():
     send = threading.Thread(target=sender, args=(sock, roomname, token), daemon=True)
     send.start()
 
-    
+    threading.Event().wait()
 
+
+if __name__ == "__main__":
+    main()
