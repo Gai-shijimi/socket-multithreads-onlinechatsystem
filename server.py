@@ -72,29 +72,30 @@ def generate_token(length=32):
 def add_info_to_rooms(header_cont, body_cont, token, rooms, lock):
     roomname = body_cont[0]
     username = body_cont[1]
-    flag = True
-    if not rooms.get(roomname):
-        flag = False
+    
     with lock:
-        if not flag and header_cont[0] == 1:
-            rooms = {
-                roomname: {
-                    "users":{
-                        token: {
-                            "token": token,
-                            "username": username, 
-                            "id": "host",
-                            "udp":None,
-                            }
-                    }
-                }
+        exists = roomname in rooms
+
+        if  header_cont[0] == 1: # 作成
+            if exists:
+                return
+            rooms[roomname] = {"users":{}}
+            rooms[roomname]["users"][token] = {
+                "token": token,
+                "username": username,
+                "id": "host",
+                "udp": None
             }
 
         elif header_cont[0] == 2:
-            rooms[roomname]["users"][token]["token"] = token
-            rooms[roomname]["users"][token]["username"] = username
-            rooms[roomname]["users"][token]["id"] = "member"
-            rooms[roomname]["users"][token]["udp"] = None
+            if not exists:
+                return
+            rooms[roomname]["users"][token] = {
+                "token": token,
+                "username":username,
+                "id": "member",
+                "udp": None
+            }
 
 
 def main_mssg_handler(header_cont, body_cont, token, conn):
@@ -200,7 +201,7 @@ def tcp_connection(conn, addr, lock, rooms):
             print("部屋がありません。ルーム作成してください。")
 
         else:
-            add_info_to_rooms(header_cont, body_cont, token, rooms)
+            add_info_to_rooms(header_cont, body_cont, token, rooms, lock)
 
             main_mssg_handler(header_cont, body_cont, token, conn)
 
@@ -210,17 +211,13 @@ def tcp_connection(conn, addr, lock, rooms):
 
 def get_username(rooms, roomname, token, lock):
     with lock:
-        for user in rooms[roomname]["users"]:
-            if user[token]["token"] == token:
-                return user[token]["username"]
+        user = rooms[roomname]["users"].get(token)
+        return user["username"] if user else None
+    
         
 def valid_token(rooms, roomname, token, lock):
     with lock:
-        for user in rooms[roomname]["users"]:
-            if user[token]["token"]== token:
-                return True
-        
-        return False
+        return token in rooms[roomname]["users"]
 
 def update_user_info(rooms, roomname, token, username, addr, lock):
     with lock:
@@ -240,24 +237,28 @@ def udp_listener(sock, rooms, lock):
         token = data[2+roomname_len:2+roomname_len+token_len].decode('utf-8')
         message = data[2+roomname_len+token_len:].decode('utf-8')
 
+
+        is_valid = valid_token(rooms, roomname, token, lock)
+        if not is_valid:
+            print("Error: invalid token")
+            continue
+
         username = get_username(rooms, roomname, token, lock)
 
         update_user_info(rooms, roomname, token, username, client_addr, lock)
 
         print(f"クライアントからのメッセージ受信：{roomname}, {username}, {token}, {message}")
 
-        is_valid = valid_token(rooms, roomname, token, lock)
-
         username_len = len(username).to_bytes(1, "big")
         username_b = username.encode('utf-8')
         message_b = message.encode('utf-8')
         payload = username_len + username_b + message_b
 
-        if is_valid:
-            for token in rooms[roomname]["users"].keys():
-                sock.sendto(payload, token["udp"])
-        else:
-            print("Error")
+        with lock:
+            for token, user_info in rooms[roomname]["users"].items():
+                if user_info["udp"] is not None:
+                    sock.sendto(payload, user_info["udp"])
+        
                 
 
 def main():

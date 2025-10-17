@@ -6,6 +6,8 @@ import queue
 SERVER_ADDRESS = '127.0.0.1'
 SERVER_PORT = 5000
 
+U_SERVER_PORT = 5001
+
 q = queue.Queue()
 
 def make_header_protocol(op, states, roomname, username):
@@ -85,11 +87,13 @@ def recv_state2_mssg(tcp_sock):
 
 
 def sender(sock, roomname, token):
-    roomname_len = len(roomname).to_bytes(1, "big")
-    token_size = len(token).to_bytes(1, "big")
 
     roomname_b = roomname.encode('utf-8')
     token_b = token.encode('utf-8')
+
+    roomname_len = len(roomname_b).to_bytes(1, "big")
+    token_size = len(token_b).to_bytes(1, "big")
+
 
     pre_payload = roomname_len + token_size + roomname_b + token_b
 
@@ -98,7 +102,7 @@ def sender(sock, roomname, token):
         message_b = message.encode('utf-8')
 
         payload =  pre_payload + message_b
-        sock.sendto(payload, (SERVER_ADDRESS, SERVER_PORT))
+        sock.sendto(payload, (SERVER_ADDRESS, U_SERVER_PORT))
 
 
 def receiver(sock):
