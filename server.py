@@ -68,6 +68,14 @@ def generate_token(length=32):
 
     return token
 
+def print_rooms_info(rooms, roomname):
+    for key, value in rooms[roomname]["users"].items():
+        token = value.get("token")
+        username = value.get("username")
+        id = value.get("id")
+        address = value.get("udp")
+        print(f"token: {token}, username: {username}, id:{id}, address: {address}")
+
 
 def add_info_to_rooms(header_cont, body_cont, token, rooms, lock):
     roomname = body_cont[0]
@@ -87,7 +95,7 @@ def add_info_to_rooms(header_cont, body_cont, token, rooms, lock):
                 "udp": None
             }
 
-        elif header_cont[0] == 2:
+        elif header_cont[0] == 2: # 参加
             if not exists:
                 return
             rooms[roomname]["users"][token] = {
@@ -104,7 +112,11 @@ def main_mssg_handler(header_cont, body_cont, token, conn):
     state1_message_send.start()
     state1_message_send.join()
 
-    message = "サーバー側においてルーム作成の処理は成功しました。"
+    
+    if header_cont[0] == 1:
+        message = f"サーバー側においてルーム作成の処理は成功しました。{body_cont[0]}を作成し、参加します。"
+    else:
+        message = f"サーバー側においてルーム参加の情報を処理しました。{body_cont[0]}に参加します。"
     states2_message_send = threading.Thread(target=s2_mssg_handler, args=(header_cont, body_cont, message, token, conn))
     states2_message_send.start()
     states2_message_send.join()
@@ -187,7 +199,6 @@ def tcp_connection(conn, addr, lock, rooms):
 
             main_mssg_handler(header_cont, body_cont, token, conn)
 
-            time.sleep(10)
             print("TCP通信のソケットを閉じます。")
             conn.close()
         
@@ -202,11 +213,14 @@ def tcp_connection(conn, addr, lock, rooms):
 
         else:
             add_info_to_rooms(header_cont, body_cont, token, rooms, lock)
-
+            
             main_mssg_handler(header_cont, body_cont, token, conn)
 
             print("TCP通信のソケットを閉じます")
             conn.close()
+
+    print_rooms_info(rooms, body_cont[0])
+    
 
 
 def get_username(rooms, roomname, token, lock):
@@ -224,7 +238,7 @@ def update_user_info(rooms, roomname, token, username, addr, lock):
         role = rooms[roomname]["users"][token]["id"]
         rooms[roomname]["users"][token].update({"token":token, "username":username, "id": role, "udp": addr})
 
-            
+
 
 def udp_listener(sock, rooms, lock):
     print("UDP通信を開始します")
