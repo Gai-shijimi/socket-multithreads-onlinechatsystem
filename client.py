@@ -1,12 +1,15 @@
 import socket
 import threading
 import queue
+import sys
 
 
 SERVER_ADDRESS = '127.0.0.1'
 SERVER_PORT = 5000
 
 U_SERVER_PORT = 5001
+
+lock = threading.Lock()
 
 q = queue.Queue()
 
@@ -104,6 +107,13 @@ def sender(sock, roomname, token):
         payload =  pre_payload + message_b
         sock.sendto(payload, (SERVER_ADDRESS, U_SERVER_PORT))
 
+def safe_print(msg):
+    with lock:
+        sys.stdout.write('\r')
+        sys.stdout.write(' ' * 80 + '\r')
+        print(msg)
+        sys.stdout.write('message >>> ')
+        sys.stdout.flush()
 
 def receiver(sock):
     while True:
@@ -113,7 +123,7 @@ def receiver(sock):
         username = data[1:1+username_len].decode('utf-8')
         message = data[1+username_len:].decode('utf-8')
 
-        print(f"{username}: {message}")
+        safe_print(f"\n{username} : {message}")
         
 
     

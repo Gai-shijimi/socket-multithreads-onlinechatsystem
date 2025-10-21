@@ -2,7 +2,6 @@ import socket
 import threading
 import secrets
 import string
-import time
 
 SERVER_ADDRESS = '127.0.0.1'
 SERVER_PORT = 5000
